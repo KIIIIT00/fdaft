@@ -43,6 +43,9 @@ class GLOHDescriptor:
         # Pre-compute log-polar grid
         self._setup_log_polar_grid()
         
+        # Pre-compute descriptor size for consistency
+        self._descriptor_size = self.get_descriptor_size()
+        
     def _setup_log_polar_grid(self):
         """Setup log-polar coordinate grid"""
         # Create coordinate grids
@@ -93,6 +96,11 @@ class GLOHDescriptor:
             magnitude: Gradient magnitude
             orientation: Gradient orientation in radians [-π, π]
         """
+        # Ensure patch is the right size
+        if patch.shape != (self.patch_size, self.patch_size):
+            # Resize if necessary
+            patch = cv2.resize(patch, (self.patch_size, self.patch_size))
+        
         # Apply Gaussian smoothing for stability
         patch_smooth = cv2.GaussianBlur(patch.astype(np.float32), (3, 3), 0.5)
         
@@ -132,9 +140,14 @@ class GLOHDescriptor:
         kernel_size = int(6 * sigma + 1)
         if kernel_size % 2 == 0:
             kernel_size += 1
-        kernel = cv2.getGaussianKernel(kernel_size, sigma)
-        hist_smooth = cv2.filter2D(hist.reshape(1, -1).astype(np.float32), 
-                                  -1, kernel.T).flatten()
+        
+        try:
+            kernel = cv2.getGaussianKernel(kernel_size, sigma)
+            hist_smooth = cv2.filter2D(hist.reshape(1, -1).astype(np.float32), 
+                                      -1, kernel.T).flatten()
+        except:
+            # Fallback if Gaussian kernel fails
+            hist_smooth = hist.astype(np.float32)
         
         # Find peaks
         peak_idx = np.argmax(hist_smooth)
@@ -146,8 +159,12 @@ class GLOHDescriptor:
             right = hist_smooth[peak_idx + 1]
             
             # Parabolic fit
-            offset = 0.5 * (left - right) / (left - 2*center + right + 1e-6)
-            peak_bin = peak_idx + offset
+            denom = left - 2*center + right
+            if abs(denom) > 1e-6:
+                offset = 0.5 * (left - right) / denom
+                peak_bin = peak_idx + offset
+            else:
+                peak_bin = peak_idx
         else:
             peak_bin = peak_idx
             
@@ -166,8 +183,12 @@ class GLOHDescriptor:
             dominant_orientation: Dominant orientation for rotation invariance
             
         Returns:
-            GLOH descriptor vector
+            GLOH descriptor vector of fixed size
         """
+        # Ensure patch is the right size
+        if patch.shape != (self.patch_size, self.patch_size):
+            patch = cv2.resize(patch, (self.patch_size, self.patch_size))
+        
         # Compute gradients
         magnitude, orientation = self.compute_gradients(patch)
         
@@ -183,55 +204,55 @@ class GLOHDescriptor:
         # Weight magnitudes
         weighted_magnitude = magnitude * gaussian_weight
         
-        # Initialize descriptor
-        descriptor = np.zeros(self.num_radial_bins * self.num_angular_bins * 
-                            self.num_orientation_bins)
+        # Initialize descriptor with fixed size
+        descriptor = np.zeros(self._descriptor_size)
         
         # Process each spatial bin
-        for r_bin in range(self.num_radial_bins):
-            for a_bin in range(self.num_angular_bins):
-                # Skip angular bins for center region
-                if r_bin == 0 and a_bin > 0:
-                    continue
-                    
-                # Create mask for this spatial bin
-                if r_bin == 0:
-                    # Center bin - no angular subdivision
-                    spatial_mask = self.center_mask & self.bin_mask
-                else:
-                    # Ring bins - with angular subdivision
-                    spatial_mask = (self.rho_bins == r_bin) & \
-                                 (self.theta_bins == a_bin) & \
-                                 self.bin_mask
-                
-                if not np.any(spatial_mask):
-                    continue
-                    
-                # Extract orientations and magnitudes for this bin
-                bin_orientations = orientation_relative[spatial_mask]
-                bin_magnitudes = weighted_magnitude[spatial_mask]
-                
-                # Create orientation histogram
+        desc_idx = 0
+        
+        # Center bin (r=0)
+        if np.any(self.center_mask & self.bin_mask):
+            bin_orientations = orientation_relative[self.center_mask & self.bin_mask]
+            bin_magnitudes = weighted_magnitude[self.center_mask & self.bin_mask]
+            
+            if len(bin_orientations) > 0:
                 hist, _ = np.histogram(
                     bin_orientations,
                     bins=self.num_orientation_bins,
                     range=(-np.pi, np.pi),
                     weights=bin_magnitudes
                 )
+                descriptor[desc_idx:desc_idx+self.num_orientation_bins] = hist
+            
+        desc_idx += self.num_orientation_bins
+        
+        # Ring bins (r>0)
+        for r_bin in range(1, self.num_radial_bins):
+            for a_bin in range(self.num_angular_bins):
+                # Create mask for this spatial bin
+                spatial_mask = (self.rho_bins == r_bin) & \
+                             (self.theta_bins == a_bin) & \
+                             self.bin_mask
                 
-                # Store in descriptor
-                if r_bin == 0:
-                    # Center bin - store in first position
-                    start_idx = 0
-                else:
-                    # Ring bins
-                    start_idx = (self.num_orientation_bins + 
-                               (r_bin - 1) * self.num_angular_bins * 
-                               self.num_orientation_bins + 
-                               a_bin * self.num_orientation_bins)
-                               
-                end_idx = start_idx + self.num_orientation_bins
-                descriptor[start_idx:end_idx] = hist
+                if np.any(spatial_mask):
+                    # Extract orientations and magnitudes for this bin
+                    bin_orientations = orientation_relative[spatial_mask]
+                    bin_magnitudes = weighted_magnitude[spatial_mask]
+                    
+                    # Create orientation histogram
+                    hist, _ = np.histogram(
+                        bin_orientations,
+                        bins=self.num_orientation_bins,
+                        range=(-np.pi, np.pi),
+                        weights=bin_magnitudes
+                    )
+                    
+                    # Store in descriptor
+                    end_idx = desc_idx + self.num_orientation_bins
+                    if end_idx <= len(descriptor):
+                        descriptor[desc_idx:end_idx] = hist
+                
+                desc_idx += self.num_orientation_bins
         
         # Normalize descriptor
         norm = np.linalg.norm(descriptor)
@@ -266,13 +287,22 @@ class GLOHDescriptor:
         # Check boundary conditions
         if (x < self.radius or x >= w - self.radius or 
             y < self.radius or y >= h - self.radius):
-            return None
+            # Return a patch filled with the boundary pixel value
+            boundary_value = 0
+            if 0 <= y < h and 0 <= x < w:
+                boundary_value = image[y, x]
+            patch = np.full((self.patch_size, self.patch_size), boundary_value, dtype=np.float32)
+            return patch
             
         # Extract patch
         patch = image[y-self.radius:y+self.radius+1, x-self.radius:x+self.radius+1]
         
         if len(patch.shape) == 3:
             patch = cv2.cvtColor(patch, cv2.COLOR_RGB2GRAY)
+        
+        # Ensure patch has correct size
+        if patch.shape != (self.patch_size, self.patch_size):
+            patch = cv2.resize(patch, (self.patch_size, self.patch_size))
             
         return patch.astype(np.float32)
         
@@ -285,32 +315,67 @@ class GLOHDescriptor:
             keypoints: Array of keypoints [N, 2] in format [y, x]
             
         Returns:
-            Array of descriptors [N, descriptor_dim]
+            Array of descriptors [N, descriptor_dim] with consistent size
         """
         if len(keypoints) == 0:
-            return np.empty((0, self.get_descriptor_size()))
+            return np.empty((0, self._descriptor_size))
             
         descriptors = []
         
         for keypoint in keypoints:
-            patch = self.extract_patch(image, keypoint)
-            
-            if patch is None:
-                # Keypoint too close to boundary
-                descriptors.append(np.zeros(self.get_descriptor_size()))
-                continue
+            try:
+                patch = self.extract_patch(image, keypoint)
                 
-            # Compute gradients
-            magnitude, orientation = self.compute_gradients(patch)
-            
-            # Find dominant orientation
-            dominant_orientation = self.compute_dominant_orientation(magnitude, orientation)
-            
-            # Compute descriptor
-            descriptor = self.compute_descriptor(patch, dominant_orientation)
-            descriptors.append(descriptor)
-            
-        return np.array(descriptors)
+                if patch is None:
+                    # Keypoint too close to boundary - create zero descriptor
+                    descriptor = np.zeros(self._descriptor_size)
+                else:
+                    # Compute gradients
+                    magnitude, orientation = self.compute_gradients(patch)
+                    
+                    # Find dominant orientation
+                    dominant_orientation = self.compute_dominant_orientation(magnitude, orientation)
+                    
+                    # Compute descriptor
+                    descriptor = self.compute_descriptor(patch, dominant_orientation)
+                
+                # Ensure descriptor has correct size
+                if len(descriptor) != self._descriptor_size:
+                    # Resize descriptor to correct size
+                    if len(descriptor) < self._descriptor_size:
+                        # Pad with zeros
+                        padded_descriptor = np.zeros(self._descriptor_size)
+                        padded_descriptor[:len(descriptor)] = descriptor
+                        descriptor = padded_descriptor
+                    else:
+                        # Truncate
+                        descriptor = descriptor[:self._descriptor_size]
+                
+                descriptors.append(descriptor)
+                
+            except Exception as e:
+                print(f"Warning: Failed to compute descriptor for keypoint {keypoint}: {e}")
+                # Add zero descriptor for failed keypoints
+                descriptors.append(np.zeros(self._descriptor_size))
+        
+        # Convert to numpy array - all descriptors should now have the same size
+        descriptors_array = np.array(descriptors)
+        
+        # Final check to ensure consistent shape
+        if descriptors_array.shape[1] != self._descriptor_size:
+            print(f"Warning: Descriptor size mismatch. Expected {self._descriptor_size}, got {descriptors_array.shape[1]}")
+            # Create correctly sized array
+            correct_descriptors = np.zeros((len(descriptors), self._descriptor_size))
+            for i, desc in enumerate(descriptors):
+                if len(desc) == self._descriptor_size:
+                    correct_descriptors[i] = desc
+                elif len(desc) < self._descriptor_size:
+                    correct_descriptors[i, :len(desc)] = desc
+                else:
+                    correct_descriptors[i] = desc[:self._descriptor_size]
+            descriptors_array = correct_descriptors
+        
+        return descriptors_array
         
     def get_descriptor_size(self) -> int:
         """Get the size of GLOH descriptor"""

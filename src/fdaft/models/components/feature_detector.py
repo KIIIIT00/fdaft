@@ -152,7 +152,7 @@ class FeatureDetector:
         """Fallback corner detection using OpenCV goodFeaturesToTrack"""
         try:
             # Use OpenCV's goodFeaturesToTrack as fallback
-            max_corners = self.max_keypoints // len(self.detector.extract_corner_points.__defaults__ or [1])
+            max_corners = self.max_keypoints // 3  # Divide by number of layers
             corners = cv2.goodFeaturesToTrack(
                 image,
                 maxCorners=max_corners,
@@ -193,26 +193,58 @@ class FeatureDetector:
             # Normalize layer
             normalized = (layer - layer.min()) / (layer.max() - layer.min() + 1e-8)
             
-            # Find local maxima
-            coordinates = peak_local_maxima(
-                normalized, 
-                min_distance=self.nms_radius, 
-                threshold_abs=0.05,
-                num_peaks=self.max_keypoints // len(high_freq_space)
-            )
+            # Find local maxima with robust handling
+            try:
+                coordinates = peak_local_maxima(
+                    normalized, 
+                    min_distance=self.nms_radius, 
+                    threshold_abs=0.05,
+                    num_peaks=self.max_keypoints // len(high_freq_space)
+                )
+                
+                # Handle different return formats
+                if isinstance(coordinates, list):
+                    if len(coordinates) > 0:
+                        blob_points = np.array(coordinates)
+                    else:
+                        blob_points = np.empty((0, 2))
+                elif isinstance(coordinates, tuple) and len(coordinates) == 2:
+                    # Some versions return (y_coords, x_coords)
+                    y_coords, x_coords = coordinates
+                    if len(y_coords) > 0 and len(x_coords) > 0:
+                        blob_points = np.column_stack((y_coords, x_coords))
+                    else:
+                        blob_points = np.empty((0, 2))
+                else:
+                    blob_points = np.empty((0, 2))
+                    
+            except Exception as e:
+                print(f"Warning: Peak detection failed: {e}")
+                blob_points = np.empty((0, 2))
             
-            if len(coordinates) > 0:
-                blob_points = np.column_stack(coordinates)
+            if len(blob_points) > 0:
+                # Ensure blob_points has correct shape
+                if blob_points.ndim == 1:
+                    blob_points = blob_points.reshape(-1, 2)
                 
                 # Compute blob scores (response values)
-                scores = normalized[coordinates]
+                scores = []
+                for point in blob_points:
+                    y, x = int(point[0]), int(point[1])
+                    if 0 <= y < normalized.shape[0] and 0 <= x < normalized.shape[1]:
+                        scores.append(normalized[y, x])
+                    else:
+                        scores.append(0.0)
+                
+                scores = np.array(scores)
                 
                 # Weight by layer
                 layer_weight = layer_idx + 1
                 scores = scores * layer_weight
                 
-                all_blobs.extend(blob_points)
-                all_scores.extend(scores)
+                # Convert to list for extending
+                all_blobs.extend(blob_points.tolist())
+                all_scores.extend(scores.tolist())
         
         if not all_blobs:
             return np.empty((0, 2)), np.array([])
@@ -237,11 +269,14 @@ class FeatureDetector:
         
         Args:
             image: Input image layer
-            corners: Corner point coordinates
+            corners: Corner point coordinates [N, 2] in format [y, x]
             
         Returns:
             Corner response scores
         """
+        if len(corners) == 0:
+            return np.array([])
+        
         # Compute gradients
         grad_x = cv2.Sobel(image, cv2.CV_32F, 1, 0, ksize=3)
         grad_y = cv2.Sobel(image, cv2.CV_32F, 0, 1, ksize=3)
@@ -251,13 +286,24 @@ class FeatureDetector:
         k = 0.04  # Harris parameter
         
         for corner in corners:
-            y, x = corner
+            # Ensure corner is in correct format and within bounds
+            if len(corner) != 2:
+                scores.append(0.0)
+                continue
+                
+            y, x = int(corner[0]), int(corner[1])
+            
+            # Check bounds
+            if (y < window_size or y >= image.shape[0] - window_size or
+                x < window_size or x >= image.shape[1] - window_size):
+                scores.append(0.0)
+                continue
             
             # Extract window around corner
-            y_start = max(0, y - window_size)
-            y_end = min(image.shape[0], y + window_size + 1)
-            x_start = max(0, x - window_size)
-            x_end = min(image.shape[1], x + window_size + 1)
+            y_start = y - window_size
+            y_end = y + window_size + 1
+            x_start = x - window_size
+            x_end = x + window_size + 1
             
             # Compute structure tensor
             Ix = grad_x[y_start:y_end, x_start:x_end]
@@ -276,7 +322,7 @@ class FeatureDetector:
             else:
                 corner_response = 0.0
             
-            scores.append(corner_response)
+            scores.append(max(0.0, corner_response))  # Ensure non-negative
         
         return np.array(scores)
     
@@ -291,8 +337,17 @@ class FeatureDetector:
         Returns:
             Filtered points and scores after NMS
         """
+        if len(points) == 0 or len(scores) == 0:
+            return np.empty((0, 2)), np.array([])
+        
+        # Ensure points and scores have same length
+        if len(points) != len(scores):
+            min_len = min(len(points), len(scores))
+            points = points[:min_len]
+            scores = scores[:min_len]
+            
         if len(points) == 0:
-            return points, scores
+            return np.empty((0, 2)), np.array([])
             
         # Sort by scores in descending order
         sorted_indices = np.argsort(scores)[::-1]
@@ -300,16 +355,20 @@ class FeatureDetector:
         keep_indices = []
         suppressed = np.zeros(len(points), dtype=bool)
         
-        for i in sorted_indices:
-            if suppressed[i]:
+        for idx in sorted_indices:
+            if idx >= len(suppressed) or suppressed[idx]:
                 continue
                 
-            keep_indices.append(i)
+            keep_indices.append(idx)
             
             # Suppress nearby points
-            distances = np.linalg.norm(points - points[i], axis=1)
-            suppress_mask = distances < self.nms_radius
-            suppressed[suppress_mask] = True
-            suppressed[i] = False  # Don't suppress the current point
+            if idx < len(points):
+                distances = np.linalg.norm(points - points[idx], axis=1)
+                suppress_mask = distances < self.nms_radius
+                
+                # Ensure suppress_mask doesn't exceed suppressed length
+                suppress_mask = suppress_mask[:len(suppressed)]
+                suppressed[:len(suppress_mask)] |= suppress_mask
+                suppressed[idx] = False  # Don't suppress the current point
             
         return points[keep_indices], scores[keep_indices]

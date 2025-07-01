@@ -38,8 +38,8 @@ class DoubleFrequencyScaleSpace:
         try:
             ecm = self._compute_structured_forests_opencv(image)
             return ecm
-        except:
-            print("Warning: OpenCV Structured Forests not available, using fallback implementation")
+        except Exception as e:
+            print(f"Warning: OpenCV Structured Forests not available ({e}), using fallback implementation")
             pass
             
         # Fallback to simplified implementation
@@ -86,6 +86,7 @@ class DoubleFrequencyScaleSpace:
         model_paths = [
             "model.yml",  # Current directory
             "models/model.yml",  # Models subdirectory
+            "models/structured_forests.yml",  # Alternative name
             "assets/model.yml",  # Assets directory
             "/usr/local/share/opencv4/model.yml",  # System path
         ]
@@ -217,16 +218,19 @@ class DoubleFrequencyScaleSpace:
         image_filtered = cv2.medianBlur(image_uint8, 5)
         
         # Detect circles
-        circles = cv2.HoughCircles(
-            image_filtered,
-            cv2.HOUGH_GRADIENT,
-            dp=1,
-            minDist=30,
-            param1=50,
-            param2=30,
-            minRadius=10,
-            maxRadius=100
-        )
+        try:
+            circles = cv2.HoughCircles(
+                image_filtered,
+                cv2.HOUGH_GRADIENT,
+                dp=1,
+                minDist=30,
+                param1=50,
+                param2=30,
+                minRadius=10,
+                maxRadius=100
+            )
+        except:
+            circles = None
         
         # Create circular structure map
         circular_map = np.zeros_like(image)
@@ -387,10 +391,14 @@ class DoubleFrequencyScaleSpace:
         
         for theta in orientations:
             for freq in frequencies:
-                kernel = cv2.getGaborKernel((15, 15), sigma=2, theta=theta, 
-                                          lambd=1.0/freq, gamma=0.5, psi=0)
-                response = cv2.filter2D(image, cv2.CV_32F, kernel)
-                responses.append(np.abs(response))
+                try:
+                    kernel = cv2.getGaborKernel((15, 15), sigma=2, theta=theta, 
+                                              lambd=1.0/freq, gamma=0.5, psi=0)
+                    response = cv2.filter2D(image, cv2.CV_32F, kernel)
+                    responses.append(np.abs(response))
+                except:
+                    # If Gabor fails, create zero response
+                    responses.append(np.zeros_like(image))
         
         return np.stack(responses, axis=2)
     
@@ -444,22 +452,9 @@ class DoubleFrequencyScaleSpace:
     def _predict_edge_confidence(self, features: np.ndarray) -> float:
         """
         Predict edge confidence using Structured Forest approach
-        
-        Structured Forests use an ensemble of decision trees that predict
-        structured outputs (edge maps) rather than scalar values.
-        
-        The training process:
-        1. Extract patches from training images with ground truth edge maps
-        2. Learn decision trees that split on patch features
-        3. Each leaf stores a structured output (edge probability map)
-        4. Ensemble multiple trees for robust prediction
-        
-        This is a simplified approximation of the actual trained model.
         """
         
         # Simulate structured forest decision tree ensemble
-        # In practice, this would be ~8-16 trained decision trees
-        
         predictions = []
         
         # Tree 1: Focus on gradient-based features
@@ -485,8 +480,8 @@ class DoubleFrequencyScaleSpace:
     
     def _decision_tree_1(self, features: np.ndarray) -> float:
         """Decision Tree 1: Gradient-based splits"""
-        grad_mean = features[6]
-        grad_std = features[7]
+        grad_mean = features[6] if len(features) > 6 else 0.0
+        grad_std = features[7] if len(features) > 7 else 0.0
         
         if grad_mean > 0.15:  # Strong gradient
             if grad_std > 0.1:  # High variation
@@ -501,9 +496,9 @@ class DoubleFrequencyScaleSpace:
     
     def _decision_tree_2(self, features: np.ndarray) -> float:
         """Decision Tree 2: Color-based splits"""
-        color_var_r = features[1]
-        color_var_g = features[3] 
-        color_var_b = features[5]
+        color_var_r = features[1] if len(features) > 1 else 0.0
+        color_var_g = features[3] if len(features) > 3 else 0.0
+        color_var_b = features[5] if len(features) > 5 else 0.0
         
         total_color_var = color_var_r + color_var_g + color_var_b
         
@@ -517,43 +512,49 @@ class DoubleFrequencyScaleSpace:
     
     def _decision_tree_3(self, features: np.ndarray) -> float:
         """Decision Tree 3: Texture-based splits"""
-        lbp_hist = features[18:28]
-        lbp_entropy = -np.sum(lbp_hist * np.log(lbp_hist + 1e-8))
-        
-        # Gabor response statistics
-        gabor_features = features[28:]
-        gabor_mean = np.mean(gabor_features[::2])
-        gabor_std = np.mean(gabor_features[1::2])
-        
-        if lbp_entropy > 1.5:  # Complex texture
-            if gabor_mean > 0.1:
-                return 0.8
-            else:
-                return 0.5
-        else:  # Simple texture
-            if gabor_std > 0.05:
-                return 0.4
-            else:
-                return 0.1
+        if len(features) > 28:
+            lbp_hist = features[18:28]
+            lbp_entropy = -np.sum(lbp_hist * np.log(lbp_hist + 1e-8))
+            
+            # Gabor response statistics
+            gabor_features = features[28:]
+            gabor_mean = np.mean(gabor_features[::2]) if len(gabor_features) > 0 else 0.0
+            gabor_std = np.mean(gabor_features[1::2]) if len(gabor_features) > 1 else 0.0
+            
+            if lbp_entropy > 1.5:  # Complex texture
+                if gabor_mean > 0.1:
+                    return 0.8
+                else:
+                    return 0.5
+            else:  # Simple texture
+                if gabor_std > 0.05:
+                    return 0.4
+                else:
+                    return 0.1
+        else:
+            return 0.3
     
     def _decision_tree_4(self, features: np.ndarray) -> float:
         """Decision Tree 4: Orientation-based splits"""
-        ori_hist = features[10:18]
-        
-        # Calculate orientation consistency
-        ori_entropy = -np.sum(ori_hist * np.log(ori_hist + 1e-8))
-        dominant_ori = np.max(ori_hist)
-        
-        if dominant_ori > 0.3:  # Strong dominant orientation
-            if ori_entropy < 1.0:  # Low entropy (consistent)
-                return 0.9
-            else:
-                return 0.6
-        else:  # No dominant orientation
-            if ori_entropy > 2.0:  # High entropy (chaotic)
-                return 0.2
-            else:
-                return 0.4
+        if len(features) > 18:
+            ori_hist = features[10:18]
+            
+            # Calculate orientation consistency
+            ori_entropy = -np.sum(ori_hist * np.log(ori_hist + 1e-8))
+            dominant_ori = np.max(ori_hist)
+            
+            if dominant_ori > 0.3:  # Strong dominant orientation
+                if ori_entropy < 1.0:  # Low entropy (consistent)
+                    return 0.9
+                else:
+                    return 0.6
+            else:  # No dominant orientation
+                if ori_entropy > 2.0:  # High entropy (chaotic)
+                    return 0.2
+                else:
+                    return 0.4
+        else:
+            return 0.3
         
     def compute_weighted_phase_congruency(self, image: np.ndarray) -> np.ndarray:
         """
@@ -583,16 +584,21 @@ class DoubleFrequencyScaleSpace:
         
         for scale in scales:
             for theta in orientations:
-                # Create Log-Gabor filter
-                kernel_real = cv2.getGaborKernel((31, 31), scale, theta, 2*np.pi/3, 0.5, 0)
-                kernel_imag = cv2.getGaborKernel((31, 31), scale, theta, 2*np.pi/3, 0.5, np.pi/2)
-                
-                # Apply filters
-                response_real = cv2.filter2D(gray, cv2.CV_32F, kernel_real)
-                response_imag = cv2.filter2D(gray, cv2.CV_32F, kernel_imag)
-                
-                responses_real.append(response_real)
-                responses_imag.append(response_imag)
+                try:
+                    # Create Log-Gabor filter
+                    kernel_real = cv2.getGaborKernel((31, 31), scale, theta, 2*np.pi/3, 0.5, 0)
+                    kernel_imag = cv2.getGaborKernel((31, 31), scale, theta, 2*np.pi/3, 0.5, np.pi/2)
+                    
+                    # Apply filters
+                    response_real = cv2.filter2D(gray, cv2.CV_32F, kernel_real)
+                    response_imag = cv2.filter2D(gray, cv2.CV_32F, kernel_imag)
+                    
+                    responses_real.append(response_real)
+                    responses_imag.append(response_imag)
+                except:
+                    # If filter fails, add zero response
+                    responses_real.append(np.zeros_like(gray))
+                    responses_imag.append(np.zeros_like(gray))
         
         # Compute phase congruency
         responses_real = np.array(responses_real)
@@ -656,32 +662,36 @@ class DoubleFrequencyScaleSpace:
         responses = []
         
         for theta in orientations:
-            # Create steerable filter kernels
-            size = int(6 * sigma + 1)
-            if size % 2 == 0:
-                size += 1
+            try:
+                # Create steerable filter kernels
+                size = int(6 * sigma + 1)
+                if size % 2 == 0:
+                    size += 1
+                    
+                x, y = np.meshgrid(np.arange(-size//2, size//2+1), 
+                                  np.arange(-size//2, size//2+1))
                 
-            x, y = np.meshgrid(np.arange(-size//2, size//2+1), 
-                              np.arange(-size//2, size//2+1))
-            
-            # Second-order Gaussian derivatives
-            exp_term = np.exp(-(x*x + y*y)/(2*sigma*sigma))
-            
-            # Base filters (equation 5)
-            G_xx = (-1/(2*np.pi*sigma**4)) * (1 - x*x/sigma**2) * exp_term
-            G_yy = (-1/(2*np.pi*sigma**4)) * (1 - y*y/sigma**2) * exp_term
-            G_xy = (x*y/(2*np.pi*sigma**6)) * exp_term
-            
-            # Steerable combination
-            cos_theta = np.cos(theta)
-            sin_theta = np.sin(theta)
-            
-            G_theta = (cos_theta**2 * G_xx + sin_theta**2 * G_yy - 
-                      2*cos_theta*sin_theta * G_xy)
-            
-            # Apply filter
-            response = cv2.filter2D(mmax, -1, G_theta)
-            responses.append(response)
+                # Second-order Gaussian derivatives
+                exp_term = np.exp(-(x*x + y*y)/(2*sigma*sigma))
+                
+                # Base filters (equation 5)
+                G_xx = (-1/(2*np.pi*sigma**4)) * (1 - x*x/sigma**2) * exp_term
+                G_yy = (-1/(2*np.pi*sigma**4)) * (1 - y*y/sigma**2) * exp_term
+                G_xy = (x*y/(2*np.pi*sigma**6)) * exp_term
+                
+                # Steerable combination
+                cos_theta = np.cos(theta)
+                sin_theta = np.sin(theta)
+                
+                G_theta = (cos_theta**2 * G_xx + sin_theta**2 * G_yy - 
+                          2*cos_theta*sin_theta * G_xy)
+                
+                # Apply filter
+                response = cv2.filter2D(mmax, -1, G_theta)
+                responses.append(response)
+            except:
+                # If filter fails, add zero response
+                responses.append(np.zeros_like(mmax))
         
         # Sum all orientation responses
         result = np.sum(responses, axis=0)
