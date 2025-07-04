@@ -1,355 +1,325 @@
-# FDAFT: Fast Double-Channel Aggregated Feature Transform
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
-
-Implementation of **Fast Double-Channel Aggregated Feature Transform for Matching Planetary Remote Sensing Images** based on the paper by Huang et al. (2024).
-
-## Overview
-
-FDAFT is a novel feature matching method specifically designed for planetary remote sensing images. It addresses the challenges of:
-- **Weak textures** in planetary surfaces
-- **Nonlinear radiation differences** due to illumination variations
-- **Scale and rotation changes** between images
-
-### Key Features
-
-- **Double-frequency scale space**: Combines low-frequency (structure) and high-frequency (phase) features
-- **Machine learning-based ECM**: Uses Structured Forests for edge confidence mapping
-- **GLOH descriptors**: Gradient Location and Orientation Histogram for robust feature description
-- **Aggregated matching**: Combines corner and blob features for improved accuracy
-
-## Installation
-
-### Dependencies
-
-```bash
-pip install opencv-contrib-python>=4.5.0
-pip install numpy>=1.19.0
-pip install scipy>=1.5.0
-pip install scikit-image>=0.17.0
-pip install matplotlib>=3.3.0
-```
-
-### Install from source
-
-```bash
-git clone https://github.com/username/fdaft.git
-cd fdaft
-pip install -e .
-```
+# FDAFT Demo Setup and Usage Guide
 
 ## Quick Start
 
-### Basic Usage
+### 1. Environment Setup
 
-```python
-import cv2
-from fdaft.models.fdaft import FDAFT
-from fdaft.utils.visualization import FDAFTVisualizer
+```bash
+# Clone or navigate to FDAFT project directory
+cd FDAFT
 
-# Initialize FDAFT
-fdaft = FDAFT(
-    num_layers=3,
-    descriptor_radius=48,
-    max_keypoints=1000
-)
+# Install dependencies
+pip install -r requirements.txt
 
-# Load images
-image1 = cv2.imread('planetary_image1.jpg', cv2.IMREAD_GRAYSCALE)
-image2 = cv2.imread('planetary_image2.jpg', cv2.IMREAD_GRAYSCALE)
+# Install FDAFT in development mode
+pip install -e .
 
-# Perform matching
-results = fdaft.match_images(image1, image2)
-
-# Visualize results
-visualizer = FDAFTVisualizer()
-visualizer.plot_matching_results(results, image1, image2)
-
-print(f"Found {results['num_final_matches']} matches")
+# Make demo scripts executable (Unix/Mac)
+chmod +x run_demo.sh
+chmod +x fdaft_demo.py
+chmod +x batch_demo.py
 ```
 
-### Feature Extraction Only
+### 2. Run Basic Demo
 
-```python
-# Extract features from single image
-corner_points, corner_desc, blob_points, blob_desc = fdaft.extract_features(image1)
+```bash
+# Method 1: Using the quick runner script
+./run_demo.sh
 
-# Visualize features
-visualizer.plot_features(image1, corner_points, blob_points)
+# Method 2: Direct Python execution
+python fdaft_demo.py
 ```
 
-## Project Structure
+## Demo Modes
 
+### 🎨 Synthetic Images (Default)
+```bash
+# Basic synthetic demo
+python fdaft_demo.py --synthetic
+
+# Synthetic demo with results saving
+python fdaft_demo.py --synthetic --save-results
 ```
-FDAFT/
-├── src/
-│   └── fdaft/
-│       ├── models/
-│       │   ├── fdaft.py                 # Main FDAFT class
-│       │   └── components/
-│       │       ├── scale_space.py       # Double-frequency scale space
-│       │       ├── feature_detector.py  # Feature point detection
-│       │       └── gloh_descriptor.py   # GLOH descriptor computation
-│       ├── utils/
-│       │   └── visualization.py         # Visualization utilities
-│       └── datasets/
-│           └── planetary_dataset.py     # Dataset handling
-├── configs/
-│   └── fdaft/
-│       └── planetary.py                 # Configuration files
-├── scripts/
-│   ├── extract_features.py              # Feature extraction script
-│   └── evaluate.py                      # Evaluation script
-├── tests/
-│   └── test_fdaft.py                    # Unit tests
-└── notebooks/
-    └── demo.ipynb                       # Jupyter demo notebook
+
+### 📁 Interactive File Selection
+```bash
+# Interactive mode (opens file dialog)
+python fdaft_demo.py --interactive
+
+# Using the runner script
+./run_demo.sh -i
+```
+
+### 🖼️ Specific Image Pair
+```bash
+# Process specific images
+python fdaft_demo.py --image1 mars_image1.jpg --image2 mars_image2.jpg
+
+# With preprocessing
+python fdaft_demo.py --image1 img1.png --image2 img2.png --enhance-contrast --resize 512 512
+```
+
+### 📂 Directory Processing
+```bash
+# Process all images in directory
+python fdaft_demo.py --directory ./planetary_images
+
+# Directory with custom settings
+python fdaft_demo.py --directory ./images --max-keypoints 1500 --save-results
 ```
 
 ## Advanced Usage
 
-### Custom Configuration
-
-```python
-# Load custom configuration
-from fdaft.configs.fdaft.planetary import config
-
-# Modify parameters
-config['model']['num_layers'] = 4
-config['model']['max_keypoints'] = 2000
-
-# Initialize with custom config
-fdaft = FDAFT(**config['model'])
-```
-
-### Batch Processing
-
+### 🔧 Parameter Tuning
 ```bash
-# Extract features from directory of images
-python scripts/extract_features.py /path/to/images --output_dir ./features --visualize
+# Adjust FDAFT parameters
+python fdaft_demo.py \
+    --max-keypoints 2000 \
+    --descriptor-radius 48 \
+    --num-layers 4 \
+    --save-results
 
-# Evaluate on dataset
-python scripts/evaluate.py /path/to/dataset --pairs_file pairs.txt --save_matches
+# High-quality processing
+python fdaft_demo.py \
+    --image1 high_res_mars1.tif \
+    --image2 high_res_mars2.tif \
+    --max-keypoints 3000 \
+    --descriptor-radius 64 \
+    --enhance-contrast
 ```
 
-### Using Pre-trained Structured Forests
-
-The implementation automatically downloads the OpenCV Structured Forests model:
-
-```python
-# Model will be automatically downloaded on first use
-fdaft = FDAFT()  # Uses Structured Forests ECM if available
-```
-
-## Algorithm Details
-
-### 1. Double-Frequency Scale Space
-
-- **Low-frequency space**: Built using Edge Confidence Map (ECM) from Structured Forests
-- **High-frequency space**: Built using weighted phase congruency and maximum moment maps
-
-### 2. Feature Detection
-
-- **Corner points**: Extracted using FAST detector from low-frequency space
-- **Blob points**: Extracted using KAZE-like detector from high-frequency space
-- **Non-maximum suppression**: Applied to reduce redundant features
-
-### 3. GLOH Descriptors
-
-- **Log-polar coordinates**: 3 radial bins × 8 angular bins + center
-- **Orientation histograms**: 16 orientation bins per spatial bin
-- **Rotation invariance**: Based on dominant gradient orientation
-
-### 4. Matching and Filtering
-
-- **Nearest neighbor matching**: With Lowe's ratio test
-- **Feature aggregation**: Combines corner and blob matches
-- **RANSAC filtering**: Removes outliers using homography estimation
-
-## Performance
-
-Typical performance on planetary images:
-- **Processing time**: ~2-5 seconds per image pair (512×512)
-- **Feature count**: 500-1500 features per image
-- **Match accuracy**: 80-95% inlier ratio after RANSAC
-- **Success rate**: >90% on diverse planetary datasets
-
-## Configuration
-
-### Model Parameters
-
-```python
-config = {
-    "model": {
-        "num_layers": 3,           # Scale space layers
-        "sigma_0": 1.0,            # Initial scale
-        "descriptor_radius": 48,    # GLOH patch radius
-        "max_keypoints": 1000,     # Maximum features per image
-        "nms_radius": 5,           # Non-maximum suppression radius
-    },
-    "matching": {
-        "ratio_threshold": 0.8,    # Lowe's ratio test threshold
-        "ransac_threshold": 3.0,   # RANSAC inlier threshold (pixels)
-        "ransac_max_iters": 1000,  # Maximum RANSAC iterations
-    }
-}
-```
-
-### Planetary-Specific Settings
-
-```python
-"planetary_specific": {
-    "crater_detection": True,              # Enhanced crater detection
-    "circular_structure_radius_range": [10, 100],  # Crater size range
-    "texture_mask_threshold": 0.02,        # Texture suppression threshold
-    "contrast_enhancement": True,          # Adaptive contrast enhancement
-}
-```
-
-## Testing
-
-Run the test suite:
-
+### 📊 Performance Benchmarking
 ```bash
-# Install test dependencies
-pip install pytest
+# Run performance benchmark
+python fdaft_demo.py --benchmark --save-results
 
-# Run tests
-pytest tests/
-
-# Run with coverage
-pytest tests/ --cov=fdaft
+# Benchmark with specific images
+python fdaft_demo.py --image1 test1.jpg --image2 test2.jpg --benchmark
 ```
 
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-### Development Setup
-
+### 🎯 Batch Processing
 ```bash
-# Clone repository
-git clone https://github.com/username/fdaft.git
-cd fdaft
+# Process multiple image pairs
+python batch_demo.py --input-dir ./dataset --output-dir ./results
 
-# Install in development mode
-pip install -e .[dev]
+# Process from pairs file
+python batch_demo.py --pairs-file image_pairs.txt --output-dir ./results
 
-# Install pre-commit hooks
-pre-commit install
+# Generate synthetic dataset and process
+python batch_demo.py --generate-synthetic 50 --output-dir ./synthetic_results
+
+# Batch with comprehensive analysis
+python batch_demo.py \
+    --input-dir ./large_dataset \
+    --output-dir ./analysis_results \
+    --save-visualizations \
+    --save-features \
+    --generate-report \
+    --benchmark
 ```
 
-## Datasets
+## Command Line Options
 
-### Supported Formats
+### Basic Options
+- `--image1 FILE`: First image file
+- `--image2 FILE`: Second image file  
+- `--directory DIR`: Process all images in directory
+- `--interactive`: Interactive file selection
+- `--synthetic`: Use synthetic images (default)
 
-- **Mars**: HiRISE, CTX, MOLA images
-- **Moon**: LRO NAC, WAC, Chang'e images
-- **General**: Any planetary surface imagery
+### Processing Options
+- `--max-keypoints N`: Maximum keypoints to extract (default: 800)
+- `--descriptor-radius N`: GLOH descriptor radius (default: 32)
+- `--num-layers N`: Scale space layers (default: 3)
+- `--resize W H`: Resize images to W×H pixels
+- `--enhance-contrast`: Apply contrast enhancement
 
-### Dataset Structure
+### Output Options
+- `--output-dir DIR`: Output directory (default: demo_results)
+- `--save-results`: Save results to files
+- `--no-visualization`: Skip visualization (for batch processing)
+
+### Performance Options
+- `--benchmark`: Run performance benchmark
+- `--verbose`: Verbose output
+
+## File Formats
+
+### Supported Image Formats
+- **JPEG**: `.jpg`, `.jpeg`
+- **PNG**: `.png`
+- **TIFF**: `.tif`, `.tiff`
+- **Bitmap**: `.bmp`
+
+### Image Pairs File Format
+Create a text file with image pairs (one pair per line):
+```
+mars_ctx_001.jpg mars_ctx_002.jpg
+lunar_nav_01.png lunar_nav_02.png
+# Comments start with #
+crater_sequence_1.tif crater_sequence_2.tif
+```
+
+## Output Structure
+
+When using `--save-results`, the output directory will contain:
 
 ```
-dataset/
-├── images/
-│   ├── mars_001.jpg
-│   ├── mars_002.jpg
+demo_results/
+├── pair_001/
+│   ├── input_image1.png
+│   ├── input_image2.png
+│   ├── corner_points1.txt
+│   ├── corner_points2.txt
+│   ├── blob_points1.txt
+│   ├── blob_points2.txt
+│   ├── corner_matches.txt
+│   ├── blob_matches.txt
+│   ├── final_matches_pts1.txt
+│   ├── final_matches_pts2.txt
+│   └── summary_report.txt
+├── pair_002/
 │   └── ...
-└── pairs.txt          # Optional: list of image pairs
+└── benchmark_results.txt (if --benchmark used)
 ```
 
-### Creating Image Pairs File
+## Examples by Use Case
 
+### 🌙 Lunar Image Analysis
+```bash
+# Lunar images often have low contrast
+python fdaft_demo.py \
+    --image1 lunar_surface_1.tif \
+    --image2 lunar_surface_2.tif \
+    --enhance-contrast \
+    --max-keypoints 1500 \
+    --descriptor-radius 40
 ```
-# Format: image1_path image2_path
-mars_001.jpg mars_002.jpg
-mars_003.jpg mars_004.jpg
-...
+
+### 🔴 Mars Terrain Matching
+```bash
+# Mars images with good texture
+python fdaft_demo.py \
+    --image1 mars_hirise_1.jpg \
+    --image2 mars_hirise_2.jpg \
+    --max-keypoints 2000 \
+    --num-layers 4
 ```
 
-## Benchmarks
+### 🛰️ Satellite Image Processing
+```bash
+# High-resolution satellite imagery
+python fdaft_demo.py \
+    --directory ./satellite_images \
+    --resize 1024 1024 \
+    --max-keypoints 3000 \
+    --save-results
+```
 
-### Comparison with Other Methods
-
-| Method | Success Rate | Avg. Matches | Runtime (s) |
-|--------|-------------|--------------|-------------|
-| SIFT   | 45%         | 123          | 1.2         |
-| SURF   | 52%         | 156          | 0.8         |
-| ORB    | 38%         | 98           | 0.3         |
-| RIFT   | 67%         | 234          | 45.1        |
-| **FDAFT** | **89%** | **456**      | **2.3**     |
-
-*Evaluated on 100 Mars HiRISE image pairs with illumination differences*
+### 🧪 Research and Evaluation
+```bash
+# Comprehensive evaluation
+python batch_demo.py \
+    --input-dir ./research_dataset \
+    --output-dir ./evaluation_results \
+    --save-visualizations \
+    --save-features \
+    --generate-report \
+    --benchmark \
+    --max-pairs 100
+```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **OpenCV ximgproc not found**:
+1. **Import Error**:
    ```bash
+   # Reinstall FDAFT
+   pip uninstall fdaft
+   pip install -e .
+   ```
+
+2. **OpenCV Issues**:
+   ```bash
+   # Install OpenCV with contrib modules
    pip uninstall opencv-python
-   pip install opencv-contrib-python
+   pip install opencv-contrib-python>=4.5.0
    ```
 
-2. **Structured Forests model download fails**:
+3. **Memory Issues**:
    ```bash
-   # Manual download
-   wget https://github.com/opencv/opencv_extra/raw/master/testdata/cv/ximgproc/model.yml.gz
-   gunzip model.yml.gz
+   # Reduce image size and keypoints
+   python fdaft_demo.py --resize 512 512 --max-keypoints 500
    ```
 
-3. **Memory issues with large images**:
-   ```python
-   # Resize images before processing
-   image = cv2.resize(image, (512, 512))
+4. **Display Issues**:
+   ```bash
+   # Use non-interactive mode
+   python fdaft_demo.py --no-visualization --save-results
    ```
 
 ### Performance Optimization
 
-- **Reduce keypoint count**: Set `max_keypoints=500` for faster processing
-- **Smaller patches**: Use `descriptor_radius=24` for speed
-- **Fewer scale layers**: Set `num_layers=2` for basic matching
+- **For Speed**: Reduce `--max-keypoints` and `--descriptor-radius`
+- **For Accuracy**: Increase `--max-keypoints` and `--num-layers`
+- **For Memory**: Use `--resize` to limit image dimensions
 
-## Citation
+### Getting Help
 
-If you use this code in your research, please cite:
+```bash
+# Show help for main demo
+python fdaft_demo.py --help
 
-```bibtex
-@article{huang2024fdaft,
-  title={Fast Double-Channel Aggregated Feature Transform for Matching Planetary Remote Sensing Images},
-  author={Huang, Rong and Wan, Genyi and Zhou, Yingying and Ye, Zhen and Xie, Huan and Xu, Yusheng and Tong, Xiaohua},
-  journal={IEEE Journal of Selected Topics in Applied Earth Observations and Remote Sensing},
-  volume={17},
-  pages={9282--9293},
-  year={2024},
-  publisher={IEEE}
-}
+# Show help for batch processing
+python batch_demo.py --help
+
+# Show help for runner script
+./run_demo.sh --help
 ```
 
-## License
+## Integration with Other Tools
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+### Using Results in MATLAB
+```matlab
+% Load feature points
+corner_pts = readmatrix('corner_points1.txt');
+blob_pts = readmatrix('blob_points1.txt');
 
-## Acknowledgments
+% Load matches
+matches = readmatrix('final_matches_pts1.txt');
+```
 
-- Original paper authors: Huang et al. (2024)
-- OpenCV team for Structured Forests implementation
-- Planetary image datasets: NASA, ESA, CNSA
-- Inspiration from LoFTR project structure
+### Using Results in Python
+```python
+import numpy as np
 
-## Related Work
+# Load results
+corner_points = np.loadtxt('corner_points1.txt')
+matches_pts1 = np.loadtxt('final_matches_pts1.txt')
+matches_pts2 = np.loadtxt('final_matches_pts2.txt')
 
-- **RIFT**: Multi-modal image matching based on radiation-variation insensitive feature transform
-- **GLOH**: Gradient Location and Orientation Histogram descriptors
-- **Structured Forests**: Fast edge detection using structured forests
-- **LoFTR**: Detector-free local feature matching with transformers
+# Visualize with matplotlib
+import matplotlib.pyplot as plt
+plt.scatter(corner_points[:, 1], corner_points[:, 0])
+plt.show()
+```
+
+## Performance Expectations
+
+### Typical Performance (512×512 images)
+- **Processing Time**: 2-5 seconds per image pair
+- **Feature Count**: 500-1500 features per image
+- **Match Count**: 50-500 final matches
+- **Success Rate**: 80-95% on suitable planetary images
+
+### Hardware Recommendations
+- **Minimum**: 4GB RAM, dual-core CPU
+- **Recommended**: 8GB+ RAM, quad-core+ CPU
+- **For Batch Processing**: 16GB+ RAM, multi-core CPU
 
 ---
 
-For more information, visit our [documentation](https://fdaft.readthedocs.io) or check the [examples](examples/) directory.
-"""
+**Ready to explore planetary image matching with FDAFT!** 🚀
+
+For more information, see the main [README.md](README.md) and [documentation](docs/).
