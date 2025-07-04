@@ -184,3 +184,6 @@ Thumbs.db
 
 # Compiled extensions
 *.py
+
+# dataset
+dataset/pragueparks/*
