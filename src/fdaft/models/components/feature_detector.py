@@ -41,23 +41,37 @@ except ImportError:
                 sorted_indices = sorted_indices[:int(num_peaks)]
             
             return list(zip(coords[0][sorted_indices], coords[1][sorted_indices]))
-        
+
+
 class FeatureDetector:
     """
-    Feature point detection for FDAFT
-    Extracts corner points from low-frequency space and blob points from high-frequency space
+    Feature point detection for FDAFT with KAZE blob detection
+    Extracts corner points from low-frequency space and blob points using KAZE from high-frequency space
     """
     
-    def __init__(self, nms_radius: int = 5, max_keypoints: int = 1000):
+    def __init__(self, nms_radius: int = 5, max_keypoints: int = 1000, use_kaze: bool = True):
         """
         Initialize feature detector
         
         Args:
             nms_radius: Radius for non-maximum suppression
             max_keypoints: Maximum number of keypoints to retain
+            use_kaze: Whether to use KAZE for blob detection (True) or fallback method (False)
         """
         self.nms_radius = nms_radius
         self.max_keypoints = max_keypoints
+        self.use_kaze = use_kaze
+        
+        # Initialize KAZE detector for blob points
+        if self.use_kaze:
+            self.kaze_detector = cv2.KAZE_create(
+                extended=False,      # Use standard KAZE (not KAZE-extended)
+                upright=False,       # Allow rotation invariance
+                threshold=0.001,     # Detection threshold
+                nOctaves=4,          # Number of octaves
+                nOctaveLayers=4,     # Number of layers per octave
+                diffusivity=cv2.KAZE_DIFF_PM_G2  # Diffusivity type
+            )
         
     def extract_corner_points(self, low_freq_space: List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -113,71 +127,25 @@ class FeatureDetector:
             
         return corners, scores
     
-    def _extract_fast_corners(self, image: np.ndarray) -> np.ndarray:
-        """Extract FAST corners with robust error handling"""
-        try:
-            corners = corner_fast(image, n=9, threshold=0.05)
-            
-            # Handle different return formats from corner_fast
-            if isinstance(corners, tuple):
-                # Some versions return (y_coords, x_coords)
-                if len(corners) == 2:
-                    y_coords, x_coords = corners
-                    if len(y_coords) > 0 and len(x_coords) > 0:
-                        corners = np.column_stack((y_coords, x_coords))
-                    else:
-                        corners = np.empty((0, 2))
-                else:
-                    corners = np.empty((0, 2))
-            elif isinstance(corners, np.ndarray):
-                # Some versions return array of coordinates
-                if corners.ndim == 1:
-                    # If 1D, convert appropriately
-                    corners = np.empty((0, 2))
-                elif corners.ndim == 2 and corners.shape[1] == 2:
-                    # Correct format
-                    pass
-                else:
-                    corners = np.empty((0, 2))
-            else:
-                corners = np.empty((0, 2))
-                
-        except Exception as e:
-            print(f"Warning: FAST corner detection failed: {e}")
-            corners = np.empty((0, 2))
-        
-        return corners
-    
-    def _extract_good_features(self, image: np.ndarray) -> np.ndarray:
-        """Fallback corner detection using OpenCV goodFeaturesToTrack"""
-        try:
-            # Use OpenCV's goodFeaturesToTrack as fallback
-            max_corners = self.max_keypoints // 3  # Divide by number of layers
-            corners = cv2.goodFeaturesToTrack(
-                image,
-                maxCorners=max_corners,
-                qualityLevel=0.01,
-                minDistance=self.nms_radius,
-                useHarrisDetector=True,
-                k=0.04
-            )
-            
-            if corners is not None:
-                # Convert from (x, y) to (y, x) format and reshape
-                corners = corners.reshape(-1, 2)
-                corners = corners[:, [1, 0]]  # Swap x,y to y,x
-            else:
-                corners = np.empty((0, 2))
-                
-        except Exception as e:
-            print(f"Warning: goodFeaturesToTrack failed: {e}")
-            corners = np.empty((0, 2))
-        
-        return corners
-        
     def extract_blob_points(self, high_freq_space: List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Extract blob points using KAZE-like detector from high-frequency images
+        Extract blob points using KAZE detector from high-frequency images
+        
+        Args:
+            high_freq_space: List of high-frequency scale space layers
+            
+        Returns:
+            blob_points: Array of blob point coordinates [N, 2]
+            blob_scores: Array of blob point scores [N]
+        """
+        if self.use_kaze:
+            return self._extract_kaze_blobs(high_freq_space)
+        else:
+            return self._extract_peak_blobs(high_freq_space)
+    
+    def _extract_kaze_blobs(self, high_freq_space: List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Extract blob points using KAZE detector
         
         Args:
             high_freq_space: List of high-frequency scale space layers
@@ -188,6 +156,77 @@ class FeatureDetector:
         """
         all_blobs = []
         all_scores = []
+        
+        print(f"    Using KAZE detector for blob extraction...")
+        
+        for layer_idx, layer in enumerate(high_freq_space):
+            try:
+                # Normalize layer to [0, 255] uint8
+                normalized = ((layer - layer.min()) / (layer.max() - layer.min() + 1e-8) * 255).astype(np.uint8)
+                
+                # Apply KAZE detection
+                keypoints = self.kaze_detector.detect(normalized, None)
+                
+                if len(keypoints) > 0:
+                    # Convert keypoints to our format [y, x]
+                    blob_points = np.array([[kp.pt[1], kp.pt[0]] for kp in keypoints])
+                    
+                    # Extract response scores
+                    scores = np.array([kp.response for kp in keypoints])
+                    
+                    # Weight by layer (higher layers get higher weights)
+                    layer_weight = layer_idx + 1
+                    scores = scores * layer_weight
+                    
+                    # Add to collection
+                    all_blobs.extend(blob_points.tolist())
+                    all_scores.extend(scores.tolist())
+                    
+                    print(f"      Layer {layer_idx}: Found {len(keypoints)} KAZE keypoints")
+                else:
+                    print(f"      Layer {layer_idx}: No KAZE keypoints found")
+                    
+            except Exception as e:
+                print(f"      Warning: KAZE detection failed for layer {layer_idx}: {e}")
+                continue
+        
+        if not all_blobs:
+            print("    No KAZE blobs found, returning empty arrays")
+            return np.empty((0, 2)), np.array([])
+            
+        blobs = np.array(all_blobs)
+        scores = np.array(all_scores)
+        
+        print(f"    Total KAZE blobs before filtering: {len(blobs)}")
+        
+        # Apply non-maximum suppression
+        blobs, scores = self._non_maximum_suppression(blobs, scores)
+        
+        # Keep top keypoints
+        if len(blobs) > self.max_keypoints:
+            top_indices = np.argsort(scores)[-self.max_keypoints:]
+            blobs = blobs[top_indices]
+            scores = scores[top_indices]
+            
+        print(f"    Final KAZE blobs after filtering: {len(blobs)}")
+        
+        return blobs, scores
+    
+    def _extract_peak_blobs(self, high_freq_space: List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Fallback blob detection using local maxima (original implementation)
+        
+        Args:
+            high_freq_space: List of high-frequency scale space layers
+            
+        Returns:
+            blob_points: Array of blob point coordinates [N, 2]
+            blob_scores: Array of blob point scores [N]
+        """
+        all_blobs = []
+        all_scores = []
+        
+        print(f"    Using fallback peak detection for blob extraction...")
         
         for layer_idx, layer in enumerate(high_freq_space):
             # Normalize layer
@@ -262,6 +301,93 @@ class FeatureDetector:
             scores = scores[top_indices]
             
         return blobs, scores
+    
+    def configure_kaze(self, threshold: float = 0.001, n_octaves: int = 4, 
+                      n_octave_layers: int = 4, extended: bool = False,
+                      upright: bool = False, diffusivity: int = cv2.KAZE_DIFF_PM_G2):
+        """
+        Configure KAZE detector parameters
+        
+        Args:
+            threshold: Detection threshold (lower = more keypoints)
+            n_octaves: Number of octaves
+            n_octave_layers: Number of layers per octave
+            extended: Use extended KAZE (slower but more distinctive)
+            upright: Don't compute orientation (faster)
+            diffusivity: Diffusivity type (PM_G1, PM_G2, WEICKERT, CHARBONNIER)
+        """
+        if self.use_kaze:
+            self.kaze_detector = cv2.KAZE_create(
+                extended=extended,
+                upright=upright,
+                threshold=threshold,
+                nOctaves=n_octaves,
+                nOctaveLayers=n_octave_layers,
+                diffusivity=diffusivity
+            )
+            print(f"KAZE detector reconfigured: threshold={threshold}, octaves={n_octaves}")
+    
+    def _extract_fast_corners(self, image: np.ndarray) -> np.ndarray:
+        """Extract FAST corners with robust error handling"""
+        try:
+            corners = corner_fast(image, n=9, threshold=0.05)
+            
+            # Handle different return formats from corner_fast
+            if isinstance(corners, tuple):
+                # Some versions return (y_coords, x_coords)
+                if len(corners) == 2:
+                    y_coords, x_coords = corners
+                    if len(y_coords) > 0 and len(x_coords) > 0:
+                        corners = np.column_stack((y_coords, x_coords))
+                    else:
+                        corners = np.empty((0, 2))
+                else:
+                    corners = np.empty((0, 2))
+            elif isinstance(corners, np.ndarray):
+                # Some versions return array of coordinates
+                if corners.ndim == 1:
+                    # If 1D, convert appropriately
+                    corners = np.empty((0, 2))
+                elif corners.ndim == 2 and corners.shape[1] == 2:
+                    # Correct format
+                    pass
+                else:
+                    corners = np.empty((0, 2))
+            else:
+                corners = np.empty((0, 2))
+                
+        except Exception as e:
+            print(f"Warning: FAST corner detection failed: {e}")
+            corners = np.empty((0, 2))
+        
+        return corners
+    
+    def _extract_good_features(self, image: np.ndarray) -> np.ndarray:
+        """Fallback corner detection using OpenCV goodFeaturesToTrack"""
+        try:
+            # Use OpenCV's goodFeaturesToTrack as fallback
+            max_corners = self.max_keypoints // 3  # Divide by number of layers
+            corners = cv2.goodFeaturesToTrack(
+                image,
+                maxCorners=max_corners,
+                qualityLevel=0.01,
+                minDistance=self.nms_radius,
+                useHarrisDetector=True,
+                k=0.04
+            )
+            
+            if corners is not None:
+                # Convert from (x, y) to (y, x) format and reshape
+                corners = corners.reshape(-1, 2)
+                corners = corners[:, [1, 0]]  # Swap x,y to y,x
+            else:
+                corners = np.empty((0, 2))
+                
+        except Exception as e:
+            print(f"Warning: goodFeaturesToTrack failed: {e}")
+            corners = np.empty((0, 2))
+        
+        return corners
         
     def _compute_corner_scores(self, image: np.ndarray, corners: np.ndarray) -> np.ndarray:
         """
