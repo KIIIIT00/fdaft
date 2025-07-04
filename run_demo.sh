@@ -1,5 +1,5 @@
 #!/bin/bash
-# Quick FDAFT Demo Runner Script
+# Quick FDAFT Demo Runner Script with Image Saving Support
 # Usage: ./run_demo.sh [options]
 
 set -e  # Exit on any error
@@ -12,6 +12,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
 NC='\033[0m' # No Color
 
 # Function to print colored output
@@ -29,6 +30,10 @@ print_error() {
 
 print_header() {
     echo -e "${BLUE}=== $1 ===${NC}"
+}
+
+print_success() {
+    echo -e "${PURPLE}[SUCCESS]${NC} $1"
 }
 
 # Check if Python is available
@@ -75,95 +80,58 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Default demo mode
-DEMO_MODE="synthetic"
+# Default settings
 OUTPUT_DIR="demo_results"
 ARGS=""
+SAVE_IMAGES=false
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         -h|--help)
-            echo "FDAFT Quick Demo Runner"
+            echo "FDAFT Quick Demo Runner with Image Saving Support"
             echo ""
             echo "Usage: $0 [options]"
             echo ""
             echo "Options:"
             echo "  -h, --help              Show this help message"
-            echo "  -s, --synthetic         Use synthetic images (default)"
-            echo "  -i, --interactive       Interactive file selection"
-            echo "  -d, --directory DIR     Process all images in directory"
-            echo "  -1, --image1 FILE       First image file"
-            echo "  -2, --image2 FILE       Second image file"
             echo "  -o, --output DIR        Output directory (default: demo_results)"
-            echo "  -b, --benchmark         Run performance benchmark"
+            echo "  --save-images           Save visualization images (PNG files)"
+            echo "  --no-display           Skip interactive display (useful for batch processing)"
             echo "  -v, --verbose           Verbose output"
-            echo "  --no-viz               Skip visualization"
-            echo "  --save                 Save results to files"
-            echo "  --enhance              Apply contrast enhancement"
-            echo "  --resize WxH           Resize images (e.g., 512x512)"
+            echo ""
+            echo "Image Saving Options:"
+            echo "  When --save-images is used, the following images will be saved:"
+            echo "    - input_images_comparison.png       : Side-by-side input images"
+            echo "    - matching_results_comprehensive.png: Complete matching analysis"
+            echo "    - features_image1.png               : Features detected in image 1"
+            echo "    - features_image2.png               : Features detected in image 2"
+            echo "    - final_matches.png                 : Final matched points visualization"
             echo ""
             echo "Examples:"
-            echo "  $0                                    # Synthetic demo"
-            echo "  $0 -i                                 # Interactive mode"
-            echo "  $0 -d ./images                       # Process directory"
-            echo "  $0 -1 mars1.jpg -2 mars2.jpg         # Specific images"
-            echo "  $0 -b --save                         # Benchmark with save"
+            echo "  $0                                    # Basic demo (display only)"
+            echo "  $0 --save-images                     # Demo with image saving"
+            echo "  $0 --save-images --no-display        # Batch mode with image saving"
+            echo "  $0 -o ./my_results --save-images     # Custom output directory"
             exit 0
-            ;;
-        -s|--synthetic)
-            DEMO_MODE="synthetic"
-            ARGS="$ARGS --synthetic"
-            shift
-            ;;
-        -i|--interactive)
-            DEMO_MODE="interactive"
-            ARGS="$ARGS --interactive"
-            shift
-            ;;
-        -d|--directory)
-            DEMO_MODE="directory"
-            ARGS="$ARGS --directory $2"
-            shift 2
-            ;;
-        -1|--image1)
-            IMAGE1="$2"
-            ARGS="$ARGS --image1 $2"
-            shift 2
-            ;;
-        -2|--image2)
-            IMAGE2="$2"
-            ARGS="$ARGS --image2 $2"
-            shift 2
             ;;
         -o|--output)
             OUTPUT_DIR="$2"
             ARGS="$ARGS --output-dir $2"
             shift 2
             ;;
-        -b|--benchmark)
-            ARGS="$ARGS --benchmark"
+        --save-images)
+            SAVE_IMAGES=true
+            ARGS="$ARGS --save-images"
+            shift
+            ;;
+        --no-display)
+            ARGS="$ARGS --no-display"
             shift
             ;;
         -v|--verbose)
             ARGS="$ARGS --verbose"
             shift
-            ;;
-        --no-viz)
-            ARGS="$ARGS --no-visualization"
-            shift
-            ;;
-        --save)
-            ARGS="$ARGS --save-results"
-            shift
-            ;;
-        --enhance)
-            ARGS="$ARGS --enhance-contrast"
-            shift
-            ;;
-        --resize)
-            ARGS="$ARGS --resize $2"
-            shift 2
             ;;
         *)
             print_error "Unknown option: $1"
@@ -173,49 +141,93 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Validate specific image inputs
-if [ ! -z "$IMAGE1" ] && [ -z "$IMAGE2" ]; then
-    print_error "When using --image1, --image2 is also required"
-    exit 1
-fi
-
-if [ ! -z "$IMAGE1" ]; then
-    if [ ! -f "$IMAGE1" ]; then
-        print_error "Image file not found: $IMAGE1"
-        exit 1
-    fi
-    DEMO_MODE="specific"
-fi
-
-if [ ! -z "$IMAGE2" ]; then
-    if [ ! -f "$IMAGE2" ]; then
-        print_error "Image file not found: $IMAGE2"
-        exit 1
-    fi
-fi
-
 # Print demo configuration
 print_header "Demo Configuration"
-print_status "Mode: $DEMO_MODE"
 print_status "Output directory: $OUTPUT_DIR"
-if [ ! -z "$IMAGE1" ]; then
-    print_status "Image 1: $IMAGE1"
-    print_status "Image 2: $IMAGE2"
+if [ "$SAVE_IMAGES" = true ]; then
+    print_success "📸 Image saving: ENABLED"
+    print_status "  - Input images comparison will be saved"
+    print_status "  - Comprehensive matching results will be saved"
+    print_status "  - Individual feature visualizations will be saved"
+    print_status "  - Final matches visualization will be saved"
+else
+    print_status "📱 Image saving: DISABLED (use --save-images to enable)"
 fi
 
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
+print_status "Created output directory: $OUTPUT_DIR"
 
 # Run the demo
 print_header "Running FDAFT Demo"
-print_status "Command: python3 fdaft_demo.py $ARGS"
+print_status "Command: python3 demo_fdaft.py $ARGS"
 
-python3 fdaft_demo.py $ARGS
+# Add some spacing for better readability
+echo ""
+
+python3 demo_fdaft.py $ARGS
 
 if [ $? -eq 0 ]; then
+    echo ""
     print_header "Demo Completed Successfully!"
-    print_status "Check the output directory: $OUTPUT_DIR"
+    print_success "✅ FDAFT demonstration finished without errors"
+    print_status "📁 Check the output directory: $OUTPUT_DIR"
+    
+    # List the contents of output directory
+    if [ -d "$OUTPUT_DIR" ]; then
+        echo ""
+        print_status "📋 Generated files:"
+        ls -la "$OUTPUT_DIR" | while IFS= read -r line; do
+            if [[ $line == *".png" ]]; then
+                echo -e "${PURPLE}    🖼️  $line${NC}"
+            elif [[ $line == *".txt" ]]; then
+                echo -e "${BLUE}    📄  $line${NC}"
+            else
+                echo "    $line"
+            fi
+        done
+    fi
+    
+    # Show image saving summary
+    if [ "$SAVE_IMAGES" = true ]; then
+        echo ""
+        print_success "📸 Visualization images saved successfully!"
+        print_status "  You can view the following images:"
+        
+        if [ -f "$OUTPUT_DIR/input_images_comparison.png" ]; then
+            print_status "  ✅ Input images comparison"
+        fi
+        if [ -f "$OUTPUT_DIR/matching_results_comprehensive.png" ]; then
+            print_status "  ✅ Comprehensive matching results"
+        fi
+        if [ -f "$OUTPUT_DIR/features_image1.png" ]; then
+            print_status "  ✅ Features in image 1"
+        fi
+        if [ -f "$OUTPUT_DIR/features_image2.png" ]; then
+            print_status "  ✅ Features in image 2"
+        fi
+        if [ -f "$OUTPUT_DIR/final_matches.png" ]; then
+            print_status "  ✅ Final matches visualization"
+        fi
+        
+        echo ""
+        print_status "🔍 To view images, you can use:"
+        print_status "  - Image viewer: 'open $OUTPUT_DIR/*.png' (macOS) or 'xdg-open $OUTPUT_DIR/*.png' (Linux)"
+        print_status "  - Web browser: Open the PNG files in your browser"
+        print_status "  - Python: Use matplotlib.image.imread() and plt.imshow()"
+    fi
+    
+    echo ""
+    print_status "🚀 Next steps:"
+    print_status "  - Try with your own planetary images"
+    print_status "  - Run: python scripts/extract_features.py <image_directory>"
+    print_status "  - Run: python scripts/evaluate.py <dataset_directory>"
+    
 else
     print_error "Demo failed with exit code $?"
+    print_status "Check the error messages above for troubleshooting"
     exit 1
 fi
+
+echo ""
+print_success "🎉 Thank you for using FDAFT!"
